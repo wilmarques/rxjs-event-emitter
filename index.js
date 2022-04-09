@@ -1,7 +1,7 @@
 //@ts-check
 
-import { fromEvent, merge, interval } from 'https://cdn.skypack.dev/rxjs';
-import { bufferTime, takeUntil, skipWhile, delay } from 'https://cdn.skypack.dev/rxjs/operators';
+import { fromEvent, merge, interval, Subject, of } from 'https://cdn.skypack.dev/rxjs';
+import { bufferTime, finalize, takeUntil, skipWhile, windowToggle, tap } from 'https://cdn.skypack.dev/rxjs/operators';
 
 import { log } from './log.js';
 
@@ -16,42 +16,69 @@ const EVENTS = [
   fromEvent(window, 'resize'),
 ];
 
-/**
- * @type number
- */
-const refreshTimerInMs = 1000;
-
-/**
- * @type number
- */
 const maxInactivityInMs = 5000;
-
 const inactivity$ = merge(...EVENTS)
   .pipe(
     bufferTime(maxInactivityInMs),
     skipWhile((events) => events.length > 0),
+    tap(() => log('Emitting inactivity')),
+    finalize(() => log('Finalizing inactivity')),
   );
 
-/**
- * @param {number} policyCont
- */
-const refresh = (policyCont) => {
-  log(`Refreshed - Policy ${policyCont}`);
-  initializeRefreshPolicy();
+const refresh = () => {
+  log(`Refreshed`);
+  restart();
+  return of(true);
 };
-const stop = (policyCont) => log(`Stopped - Policy ${policyCont}`);
 
-let cont = 0;
-const initializeRefreshPolicy = () => {
-  const policyCont = cont++;
-  interval(refreshTimerInMs)
+const restart$ = new Subject();
+const restart = () => {
+  log(`Restarted`);
+  restart$.next();
+};
+
+const stop$ = new Subject();
+const stop = () => stop$.next();
+
+const initialize = () => {
+
+  const refreshTimeInMs = 1000;
+  log('Initialized');
+
+  interval(refreshTimeInMs)
     .pipe(
-      takeUntil(inactivity$),
+      windowToggle(restart$, () => interval(refreshTimeInMs)),
+      takeUntil(
+        merge(
+          inactivity$,
+          stop$,
+        )
+      ),
+      tap(() => refresh()),
+      finalize(() => log('Finalized')),
     )
-    .subscribe({
-      next: () => refresh(policyCont),
-      complete: () => stop(policyCont),
-    });
+    .subscribe();
 };
 
-initializeRefreshPolicy();
+fromEvent(document.getElementsByTagName('button'), 'click')
+  .pipe(
+    tap((event) => {
+      const methodName = event.target.id; // Same as button id
+      const method = window['policy'][methodName];
+      method();
+    }),
+  )
+  .subscribe();
+
+window['policy'] = {
+  initialize,
+  stop,
+  restart,
+  refresh,
+};
+
+window['streams'] = {
+  inactivity$,
+  stop$,
+  restart$,
+};
